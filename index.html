@@ -183,9 +183,11 @@
         <div class="options" id="options-box"></div>
 
         <div class="toolbar" style="margin-top:18px">
-          <button class="btn" onclick="submitAnswer()">送出答案</button>
-          <button class="btn secondary hidden" id="next-btn" onclick="nextQuestion()">下一題</button>
-          <button class="btn ghost" onclick="showScreen('screen-home')">離開</button>
+          <button class="btn ghost" id="prev-btn" onclick="prevQuestion()">上一題</button>
+          <button class="btn" id="submit-btn" onclick="submitAnswer()">送出答案</button>
+          <button class="btn secondary" id="next-btn" onclick="nextQuestion()">下一題</button>
+          <button class="btn light" id="mark-btn" onclick="toggleMarkQuestion()">註記此題</button>
+          <button class="btn ghost" id="exit-btn" onclick="confirmExitQuiz()">離開</button>
         </div>
 
         <div id="feedback-box" class="card hidden" style="margin-top:18px; padding:18px">
@@ -221,7 +223,19 @@
         <div class="toolbar" style="margin-top:18px">
           <button class="btn" onclick="retryWrongQuestions()">錯題再練</button>
           <button class="btn secondary" onclick="showWrongBook()">查看錯題本</button>
+          <button class="btn light" onclick="showMarkedQuestions()">查看註記題</button>
           <button class="btn ghost" onclick="showScreen('screen-home')">回首頁</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="screen-marked" class="hidden">
+      <div class="card">
+        <h2>註記題目</h2>
+        <div id="marked-list" class="analysis">尚無註記題目。</div>
+        <div class="toolbar">
+          <button class="btn" onclick="showScreen('screen-result')">返回成績頁</button>
+          <button class="btn secondary" onclick="clearMarkedQuestions()">清空註記</button>
         </div>
       </div>
     </section>
@@ -246,10 +260,14 @@
     let selectedAnswers = new Set();
     let currentResult = [];
     let wrongRetryMode = false;
+    let markedQuestions = new Set();
 
     const SCREENS = [
-      "screen-home","screen-architecture","screen-json-guide","screen-quiz","screen-result","screen-wrongbook"
+      "screen-home","screen-architecture","screen-json-guide","screen-quiz","screen-result","screen-marked","screen-wrongbook"
     ];
+
+
+    
 
     async function loadQuestions(){
       try{
@@ -319,11 +337,18 @@
     }
 
     function renderQuestion(){
-      selectedAnswers = new Set();
-      document.getElementById("feedback-box").classList.add("hidden");
-      document.getElementById("next-btn").classList.add("hidden");
-
       const q = quizSet[currentIndex];
+      if(!q) return;
+
+      selectedAnswers = new Set();
+
+      const existing = currentResult[currentIndex];
+      if(existing && Array.isArray(existing.selected)){
+        selectedAnswers = new Set(existing.selected);
+      }
+
+      document.getElementById("feedback-box").classList.add("hidden");
+
       document.getElementById("quiz-subject-pill").textContent = currentSubject;
       document.getElementById("quiz-progress-pill").textContent = `第 ${currentIndex + 1} / ${quizSet.length} 題`;
       document.getElementById("quiz-meta-right").textContent = `${getLabelType(q.type)} ／ 難度 ${q.difficulty}`;
@@ -340,9 +365,45 @@
         div.className = "option";
         div.dataset.key = key;
         div.innerHTML = `<b>${key}.</b> ${value}`;
+        if(selectedAnswers.has(key)) div.classList.add("selected");
         div.onclick = () => toggleOption(div, q.type);
         box.appendChild(div);
       });
+
+      const prevBtn = document.getElementById("prev-btn");
+      if(prevBtn) prevBtn.disabled = currentIndex === 0;
+
+      const exitBtn = document.getElementById("exit-btn");
+      if(exitBtn) exitBtn.disabled = currentIndex < quizSet.length - 1;
+
+      const markBtn = document.getElementById("mark-btn");
+      if(markBtn){
+        const marked = markedQuestions.has(q.id);
+        markBtn.textContent = marked ? "取消註記" : "註記此題";
+      }
+
+      if(existing && existing.submitted){
+        showStoredFeedback(existing);
+      }
+    }
+
+    function showStoredFeedback(record){
+      const q = quizSet[currentIndex];
+      const correctSet = new Set(q.answer);
+      const options = [...document.querySelectorAll(".option")];
+      options.forEach(opt => {
+        const key = opt.dataset.key;
+        if(correctSet.has(key)) opt.classList.add("correct");
+        if(record.selected.includes(key) && !correctSet.has(key)) opt.classList.add("wrong");
+      });
+      const feedbackBox = document.getElementById("feedback-box");
+      feedbackBox.classList.remove("hidden");
+      document.getElementById("feedback-result").innerHTML = record.isCorrect
+        ? `<span class="success">答對了</span>`
+        : `<span class="danger">答錯了</span>`;
+      document.getElementById("feedback-answer").textContent =
+        `你的答案：${record.selected.sort().join(", ")} ｜ 正確答案：${q.answer.join(", ")}`;
+      document.getElementById("feedback-explanation").textContent = `解析：${q.explanation}`;
     }
 
     function toggleOption(div, type){
@@ -371,6 +432,7 @@
 
     function submitAnswer(){
       const q = quizSet[currentIndex];
+      if(!q) return;
       if(selectedAnswers.size === 0){
         alert("請先作答。");
         return;
@@ -381,9 +443,9 @@
       const options = [...document.querySelectorAll(".option")];
       options.forEach(opt => {
         const key = opt.dataset.key;
+        opt.classList.remove("correct","wrong");
         if(correctSet.has(key)) opt.classList.add("correct");
         if(selectedAnswers.has(key) && !correctSet.has(key)) opt.classList.add("wrong");
-        opt.onclick = null;
       });
 
       const feedbackBox = document.getElementById("feedback-box");
@@ -395,7 +457,11 @@
         `你的答案：${[...selectedAnswers].sort().join(", ")} ｜ 正確答案：${q.answer.join(", ")}`;
       document.getElementById("feedback-explanation").textContent = `解析：${q.explanation}`;
 
-      currentResult.push({
+      const previous = currentResult[currentIndex];
+      const wasSubmitted = previous && previous.submitted;
+      const wasWrong = previous && previous.submitted && !previous.isCorrect;
+
+      currentResult[currentIndex] = {
         id: q.id,
         subject: q.subject,
         topic: q.topic,
@@ -403,37 +469,67 @@
         selected: [...selectedAnswers],
         correct: q.answer,
         isCorrect,
-        explanation: q.explanation
-      });
+        explanation: q.explanation,
+        submitted: true
+      };
 
-      if(!isCorrect) saveWrongQuestion(q, [...selectedAnswers]);
-
-      document.getElementById("next-btn").classList.remove("hidden");
+      if(!isCorrect && !wasWrong) saveWrongQuestion(q, [...selectedAnswers]);
     }
 
     function nextQuestion(){
-      if(currentResult.length !== currentIndex + 1){
-        alert("請先送出本題答案。");
-        return;
-      }
-      currentIndex++;
-      if(currentIndex >= quizSet.length){
+      if(currentIndex < quizSet.length - 1){
+        currentIndex++;
+        renderQuestion();
+      }else{
+        const submittedCount = currentResult.filter(x => x && x.submitted).length;
+        if(submittedCount === 0){
+          alert("目前尚未作答，請先完成題目。");
+          return;
+        }
         renderResult();
         showScreen("screen-result");
-        setTimeout(() => { alert(`測驗完成！\n最終分數：${correct} / ${total}\n答對率：${rate}%`); }, 100);
-      }else{
+      }
+    }
+
+    function prevQuestion(){
+      if(currentIndex > 0){
+        currentIndex--;
         renderQuestion();
       }
     }
 
+    function toggleMarkQuestion(){
+      const q = quizSet[currentIndex];
+      if(!q) return;
+      if(markedQuestions.has(q.id)){
+        markedQuestions.delete(q.id);
+      }else{
+        markedQuestions.add(q.id);
+      }
+      const markBtn = document.getElementById("mark-btn");
+      if(markBtn){
+        markBtn.textContent = markedQuestions.has(q.id) ? "取消註記" : "註記此題";
+      }
+    }
+
+    function confirmExitQuiz(){
+      if(currentIndex < quizSet.length - 1){
+        alert("請先完成全部題目，最後一題作答完成後才能離開。");
+        return;
+      }
+      renderResult();
+      showScreen("screen-result");
+    }
+
     function renderResult(){
       const total = quizSet.length;
-      const correct = currentResult.filter(x => x.isCorrect).length;
-      const wrong = total - correct;
-      const rate = Math.round((correct / total) * 100);
+      const answered = currentResult.filter(x => x && x.submitted).length;
+      const correct = currentResult.filter(x => x && x.submitted && x.isCorrect).length;
+      const wrong = answered - correct;
+      const rate = answered ? Math.round((correct / answered) * 100) : 0;
 
       document.getElementById("final-score").textContent = `${correct} / ${total}`;
-      document.getElementById("final-summary").textContent = `本次測驗完成，答對率 ${rate}%`;
+      document.getElementById("final-summary").textContent = `本次測驗完成，已作答 ${answered} / ${total} 題，答對率 ${rate}%`;
       document.getElementById("final-subject").textContent = `科目：${currentSubject}`;
       document.getElementById("final-time").textContent = `完成時間：${new Date().toLocaleString()}`;
       document.getElementById("stat-total").textContent = total;
@@ -459,6 +555,27 @@
         savedAt: new Date().toISOString()
       });
       localStorage.setItem("wrongBook", JSON.stringify(old));
+    }
+
+    function showMarkedQuestions(){
+      const marked = quizSet.filter(q => markedQuestions.has(q.id));
+      const el = document.getElementById("marked-list");
+      if(!marked.length){
+        el.textContent = "尚無註記題目。";
+      }else{
+        el.innerHTML = marked.map((q, i) => `
+          <div style="padding:14px 0; border-bottom:1px solid #e5e7eb">
+            <div><b>${i+1}. [${q.subject}] ${q.topic}</b></div>
+            <div>${q.stem}</div>
+          </div>
+        `).join("");
+      }
+      showScreen("screen-marked");
+    }
+
+    function clearMarkedQuestions(){
+      markedQuestions.clear();
+      showMarkedQuestions();
     }
 
     function showWrongBook(){
